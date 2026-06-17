@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Changed package metadata display in GitHub Actions to inspect `.deb` files
   one at a time after `dpkg -I dist/*.deb` failed on multiple packages.
+- Fixed release publishing paths after downloaded workflow artifacts preserved
+  their `dist/` and `sources/` directories.
 
 ### Added
 

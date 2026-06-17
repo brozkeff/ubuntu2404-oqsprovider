@@ -188,12 +188,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          . artifacts/release.env
+          . artifacts/dist/release.env
           notes="Unofficial Ubuntu 24.04 OQS provider packages built from liboqs ${liboqs_version} and oqs-provider ${oqsprovider_version} at ${github_sha}."
           if gh release view "$release_tag" >/dev/null 2>&1; then
-            gh release upload "$release_tag" artifacts/*.deb artifacts/*.tar.gz artifacts/*LICENSE.txt --clobber
+            gh release upload "$release_tag" artifacts/dist/*.deb artifacts/sources/*.tar.gz artifacts/sources/*LICENSE.txt --clobber
           else
-            gh release create "$release_tag" artifacts/*.deb artifacts/*.tar.gz artifacts/*LICENSE.txt \
+            gh release create "$release_tag" artifacts/dist/*.deb artifacts/sources/*.tar.gz artifacts/sources/*LICENSE.txt \
               --title "$release_tag" \
               --notes "$notes"
           fi
