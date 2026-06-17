@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2026-06-17]
 
+### Fixed
+
+- Changed package metadata display in GitHub Actions to inspect `.deb` files
+  one at a time after `dpkg -I dist/*.deb` failed on multiple packages.
+
 ### Added
 
 - Initial Ubuntu 24.04 GitHub Actions build pipeline for unofficial `liboqs`

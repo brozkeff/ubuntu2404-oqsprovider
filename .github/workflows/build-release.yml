@@ -146,7 +146,9 @@ jobs:
       - name: Show package metadata
         run: |
           set -euo pipefail
-          dpkg -I dist/*.deb
+          for package in dist/*.deb; do
+            dpkg -I "$package"
+          done
 
       - name: Write release metadata
         run: |
