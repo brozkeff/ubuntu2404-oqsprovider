@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one at a time after `dpkg -I dist/*.deb` failed on multiple packages.
 - Fixed release publishing paths after downloaded workflow artifacts preserved
   their `dist/` and `sources/` directories.
+- Set `GH_REPO` for release publishing because the release job does not check
+  out a git repository.
 
 ### Added
 
