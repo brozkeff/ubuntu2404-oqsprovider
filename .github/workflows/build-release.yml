@@ -1,0 +1,197 @@
+name: Build release packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish artifacts to a GitHub release"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+      - "build-*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    env:
+      LIBOQS_VERSION: "0.15.0"
+      OQSPROVIDER_VERSION: "0.11.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare build identity
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          build_date="$(date -u +%Y%m%d)"
+          identity="${build_date}.g${short_sha}"
+          release_tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            release_tag="build-${identity}"
+          fi
+          {
+            echo "BUILD_IDENTITY=${identity}"
+            echo "RELEASE_TAG=${release_tag}"
+            echo "DEB_SUFFIX=brozkeff.${identity}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            astyle \
+            cmake \
+            gcc \
+            git \
+            ninja-build \
+            libssl-dev \
+            python3-pytest \
+            python3-pytest-xdist \
+            unzip \
+            xsltproc \
+            doxygen \
+            graphviz \
+            python3-yaml \
+            valgrind
+
+      - name: Fetch pinned sources
+        run: |
+          set -euo pipefail
+          git clone --branch "$LIBOQS_VERSION" --depth 1 \
+            https://github.com/open-quantum-safe/liboqs.git
+          git clone --branch "$OQSPROVIDER_VERSION" --depth 1 \
+            https://github.com/open-quantum-safe/oqs-provider.git
+          mkdir -p dist sources
+          git -C liboqs archive --format=tar.gz \
+            --output="../sources/liboqs-${LIBOQS_VERSION}.tar.gz" HEAD
+          git -C oqs-provider archive --format=tar.gz \
+            --output="../sources/oqs-provider-${OQSPROVIDER_VERSION}.tar.gz" HEAD
+          cp "$(find liboqs -maxdepth 1 -iname 'LICENSE*' -print -quit)" \
+            "sources/liboqs-${LIBOQS_VERSION}-LICENSE.txt"
+          cp "$(find oqs-provider -maxdepth 1 -iname 'LICENSE*' -print -quit)" \
+            "sources/oqs-provider-${OQSPROVIDER_VERSION}-LICENSE.txt"
+
+      - name: Build liboqs
+        run: |
+          set -euo pipefail
+          cmake -S liboqs -B liboqs/build -GNinja -DBUILD_SHARED_LIBS=ON
+          cmake --build liboqs/build
+          # Intentionally disabled for the first successful build.
+          # cmake --build liboqs/build --target run_tests
+          cmake --build liboqs/build --target gen_docs
+          cmake --build liboqs/build --target package
+
+      - name: Repack and install liboqs
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find liboqs/build -maxdepth 1 -name 'liboqs*.deb' -print)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            printf 'Expected exactly one liboqs .deb, found %s:\n' "${#packages[@]}" >&2
+            printf '%s\n' "${packages[@]}" >&2
+            exit 1
+          fi
+          pkg="${packages[0]}"
+          new_version="${LIBOQS_VERSION}+${DEB_SUFFIX}"
+          work="$(mktemp -d)"
+          dpkg-deb -R "$pkg" "$work/pkg"
+          sed -i "s/^Version: .*/Version: ${new_version}/" "$work/pkg/DEBIAN/control"
+          out="dist/liboqs_${new_version}_ubuntu24.04_$(dpkg --print-architecture).deb"
+          dpkg-deb -b "$work/pkg" "$out"
+          sudo apt-get install -y "$PWD/$out"
+          sudo ldconfig
+
+      - name: Build oqs-provider
+        run: |
+          set -euo pipefail
+          cmake -S oqs-provider -B oqs-provider/_build
+          cmake --build oqs-provider/_build
+          ctest --test-dir oqs-provider/_build --parallel 2 --rerun-failed --output-on-failure
+          cmake --build oqs-provider/_build --target package
+
+      - name: Repack and install oqs-provider
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find oqs-provider/_build -maxdepth 1 -name 'oqs-provider*.deb' -print)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            printf 'Expected exactly one oqs-provider .deb, found %s:\n' "${#packages[@]}" >&2
+            printf '%s\n' "${packages[@]}" >&2
+            exit 1
+          fi
+          pkg="${packages[0]}"
+          new_version="${OQSPROVIDER_VERSION}+${DEB_SUFFIX}"
+          work="$(mktemp -d)"
+          dpkg-deb -R "$pkg" "$work/pkg"
+          sed -i "s/^Version: .*/Version: ${new_version}/" "$work/pkg/DEBIAN/control"
+          out="dist/oqs-provider_${new_version}_ubuntu24.04_$(dpkg --print-architecture).deb"
+          dpkg-deb -b "$work/pkg" "$out"
+          sudo apt-get install -y "$PWD/$out"
+
+      - name: Enable and verify oqsprovider
+        run: |
+          set -euo pipefail
+          sudo scripts/enable-oqsprovider.sh --unattended
+          openssl list -providers | grep -Eq '^[[:space:]]+oqsprovider$'
+
+      - name: Show package metadata
+        run: |
+          set -euo pipefail
+          dpkg -I dist/*.deb
+
+      - name: Write release metadata
+        run: |
+          set -euo pipefail
+          {
+            echo "release_tag=${RELEASE_TAG}"
+            echo "liboqs_version=${LIBOQS_VERSION}"
+            echo "oqsprovider_version=${OQSPROVIDER_VERSION}"
+            echo "github_sha=${GITHUB_SHA}"
+          } > dist/release.env
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oqsprovider-packages
+          path: |
+            dist/*
+            sources/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    if: github.ref_type == 'tag' || inputs.publish_release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: oqsprovider-packages
+          path: artifacts
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . artifacts/release.env
+          notes="Unofficial Ubuntu 24.04 OQS provider packages built from liboqs ${liboqs_version} and oqs-provider ${oqsprovider_version} at ${github_sha}."
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" artifacts/*.deb artifacts/*.tar.gz artifacts/*LICENSE.txt --clobber
+          else
+            gh release create "$release_tag" artifacts/*.deb artifacts/*.tar.gz artifacts/*LICENSE.txt \
+              --title "$release_tag" \
+              --notes "$notes"
+          fi
